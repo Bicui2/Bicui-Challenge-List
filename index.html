@@ -95,7 +95,7 @@ try{const raw=localStorage.getItem('mylist');if(raw){if(localStorage.getItem('my
 S=S||JSON.parse(SEED_TXT);
 let tab='challenge',edit=false,q='',pq='';
 let warned=false;
-const save=()=>{try{localStorage.setItem('mylist',JSON.stringify(S));localStorage.setItem('mylist_seed',SEEDH)}catch(e){if(!warned){warned=true;alert('Sauvegarde locale impossible (trop d’images ?). Clique sur « Télécharger le site » pour ne rien perdre.')}}};
+const save=()=>{try{localStorage.setItem('mylist',JSON.stringify(S));localStorage.setItem('mylist_seed',SEEDH)}catch(e){if(!warned){warned=true;alert('Sauvegarde locale impossible (trop d’images ?). Clique sur « Télécharger le site » pour ne rien perdre.')}}syncLevelsToDB();};
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pts=r=>Math.max(1,250*Math.pow(.955,r-1));
 const ytId=u=>{const m=(u||'').match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([\w-]{11})/);return m&&m[1]};
@@ -265,6 +265,38 @@ function allLevelsList(){
  Object.entries(LISTS).forEach(([k,label])=>(S.lists[k]||[]).forEach((l,idx)=>out.push({key:k,idx,id:l.id,label:`${label} — ${l.name}`})));
  return out;
 }
+let _syncing=false;
+async function syncLevelsToDB(){
+ const c=sb();if(!c||_syncing)return;_syncing=true;
+ try{
+  const rows=[];
+  Object.entries(S.lists).forEach(([key,arr])=>arr.forEach((l,pos)=>rows.push({id:l.id,list_key:key,position:pos,data:l})));
+  if(rows.length)await c.from('levels').upsert(rows);
+  const{data:existing}=await c.from('levels').select('id');
+  if(existing){
+   const ids=rows.map(r=>r.id),toDel=existing.filter(e=>!ids.includes(e.id)).map(e=>e.id);
+   if(toDel.length)await c.from('levels').delete().in('id',toDel);
+  }
+ }catch(e){}
+ _syncing=false;
+}
+async function loadLevelsFromDB(){
+ const c=sb();if(!c)return;
+ try{
+  const{data,error}=await c.from('levels').select('*').order('list_key').order('position');
+  if(error)return;
+  if(!data.length){syncLevelsToDB();return}
+  const lists={};
+  data.forEach(r=>{(lists[r.list_key]=lists[r.list_key]||[]).push(r.data)});
+  S.lists=lists;
+  try{localStorage.setItem('mylist',JSON.stringify(S));localStorage.setItem('mylist_seed',SEEDH)}catch(e){}
+  render();
+ }catch(e){}
+}
+function initRealtime(){
+ const c=sb();if(!c||window._sbChannel)return;
+ window._sbChannel=c.channel('levels-sync').on('postgres_changes',{event:'*',schema:'public',table:'levels'},()=>{loadLevelsFromDB()}).subscribe();
+}
 function validateProof(){
  const allLevels=allLevelsList();
  if(!allLevels.length)return alert('Il n’y a aucun niveau sur ce site pour l’instant.');
@@ -367,5 +399,7 @@ function enterEdit(){const go=()=>{edit=true;render();scrollTo(0,0)};unlocked()?
 $('#editlink').onclick=enterEdit;
 checkDiscordRedirect();
 render();
+loadLevelsFromDB();
+initRealtime();
 if(location.hash==='#edit')enterEdit();
 </script></body></html>
